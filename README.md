@@ -1,4 +1,5 @@
-# 🎮🕹️ Pokémon Backend API - Proyecto DAW
+# 🎮🕹️ Pokémon Backend API - Proyecto DAW![poka0012](https://github.com/user-attachments/assets/a112bfd7-8c0b-49c1-b2af-1d450fa7316a)
+
 
 ![Java](https://img.shields.io/badge/Java-21-orange) ![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.x-green) ![MySQL](https://img.shields.io/badge/MySQL-8.0-blue) ![JWT](https://img.shields.io/badge/Security-JWT-red)
 
