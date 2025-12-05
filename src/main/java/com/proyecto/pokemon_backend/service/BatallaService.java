@@ -1,13 +1,21 @@
 package com.proyecto.pokemon_backend.service;
 
+import com.proyecto.pokemon_backend.dto.CapturaRequest;
 import com.proyecto.pokemon_backend.dto.TurnoRequest;
 import com.proyecto.pokemon_backend.dto.TurnoResponse; // Para devolver el resultado completo
 import com.proyecto.pokemon_backend.model.PokemonUsuario;
+import com.proyecto.pokemon_backend.repository.InventarioUsuarioRepository;
+import com.proyecto.pokemon_backend.model.Usuario;
 import com.proyecto.pokemon_backend.model.enums.Estado;
 import com.proyecto.pokemon_backend.model.Ataques;
+import com.proyecto.pokemon_backend.model.InventarioUsuario;
+import com.proyecto.pokemon_backend.model.Item;
 import com.proyecto.pokemon_backend.model.PokedexMaestra; 
 import com.proyecto.pokemon_backend.repository.PokemonUsuarioRepository;
+import com.proyecto.pokemon_backend.repository.UserRepository;
 import com.proyecto.pokemon_backend.repository.AtaquesRepository;
+import com.proyecto.pokemon_backend.repository.InventarioUsuarioRepository;
+import com.proyecto.pokemon_backend.repository.ItemRepository;
 import com.proyecto.pokemon_backend.repository.PokedexMasterRepository;
 import com.proyecto.pokemon_backend.service.logica.CalculoService; // Módulo Matemático
 import org.springframework.stereotype.Service;
@@ -21,16 +29,26 @@ public class BatallaService {
     private final PokedexMasterRepository pokedexMasterRepository;
     private final CalculoService calculoService;
     private final TipoService tipoService;
+    private final ItemRepository itemRepository;
+    private final InventarioUsuarioRepository inventarioRepository;
+    private final UserRepository userRepository;
+
 
     public BatallaService(PokemonUsuarioRepository pokemonUsuarioRepository,
                           PokedexMasterRepository pokedexMasterRepository,
                           AtaquesRepository ataquesRepository,
                           CalculoService calculoService,
-                          TipoService tipoService) {
+                          TipoService tipoService,
+                          ItemRepository itemRepository,
+                          InventarioUsuarioRepository inventarioRepository,
+                          UserRepository userRepository) {
         this.pokemonUsuarioRepository = pokemonUsuarioRepository;
         this.pokedexMasterRepository = pokedexMasterRepository;
         this.calculoService = calculoService;
         this.tipoService = tipoService;
+        this.itemRepository = itemRepository;
+        this.inventarioRepository = inventarioRepository;
+        this.userRepository = userRepository;
     }
 
     /**
@@ -192,6 +210,7 @@ public class BatallaService {
         }
         return null; // Puede atacar normalmente
     }
+    
     private String aplicarEfectosPostTurno(PokemonUsuario pkm){
         StringBuilder mensaje = new StringBuilder();
 
@@ -221,10 +240,70 @@ public class BatallaService {
 
         if (dano > 0) {
             pkm.setHpActual(Math.max(0, pkm.getHpActual() - dano));
+            
         }
         return msg;
+    
     }
+
+    // Método para la captura de Pokémon
+
+    @Transactional
+    public String intentarCaptura(String username, CapturaRequest request){
+
+        // I. Carga de entidad
+        Usuario usuario =  userRepository.findByUsername(username)
+            .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+        PokemonUsuario salvaje = pokemonUsuarioRepository.findById(request.getDefensorId())
+            .orElseThrow(() -> new RuntimeException("Pokémon salvaje no encontrado"));
+
+        PokedexMaestra datosMaestros = pokedexMasterRepository.findById(salvaje.getPokedexId())
+            .orElseThrow(() -> new RuntimeException("Datos de la Pokédex no encontrados"));
+
+        // II. Verificar el inventario ("Tiene el usuario Pokeball?")
+        Item ball = itemRepository.findByNombre(request.getNombreBall())
+            .orElseThrow(()-> new RuntimeException("Esa pokeball no existe"));
+
+        InventarioUsuario inventario = inventarioRepository.findByUsuarioAndItem(usuario, ball)
+            .orElseThrow(()-> new RuntimeException("No tienes " + request.getNombreBall()));
+
+        if(inventario.getCantidad() <= 0){
+            throw new RuntimeException("¡Te has quedado sin " + request.getNombreBall() + "!");
+        }
+
+        // III. Gastar la Pokéballa
+        inventario.setCantidad(inventario.getCantidad() - 1);
+        inventarioRepository.save(inventario);
+
+        // IV. Determinar la bonificación de la Pokéball
+        double bonoBall = 1;
+        if(ball.getNombre().equalsIgnoreCase("Super Ball")) bonoBall = 1.5;
+        if(ball.getNombre().equalsIgnoreCase("Ultra Ball")) bonoBall = 2.0;
+        if(ball.getNombre().equalsIgnoreCase("Master Ball")) bonoBall = 255.0;
+
+        // V. Calcular captura
+        boolean atrapado = calculoService.calcularCaptura(
+            salvaje.getHpMax(),
+            salvaje.getHpActual(),
+            datosMaestros.getRatioCaptura(),
+            bonoBall,
+            salvaje.getEstado()    
+        );
+        if(atrapado){
+            // VI. Convertir el Pokémon en propiedad del usuario
+            salvaje.setUsuarioId(usuario.getIdUsuario()); // Así es del usuario
+            salvaje.setPosicionEquipo(2); // *** HAY QUE CALCULAR EL HUECO LIBRE ***
+            pokemonUsuarioRepository.save(salvaje);
+            return "¡Ya está! " + "¡ " + datosMaestros.getNombre() + " ha sido atrapado!";
+        }else{
+            return "!Oh no! !El Pokémon salvaje se ha escapado¡";
+        }
+
+    }
+
+}
 
 
     
-}
+

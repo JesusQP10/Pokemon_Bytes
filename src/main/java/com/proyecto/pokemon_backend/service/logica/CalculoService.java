@@ -169,7 +169,7 @@ public class CalculoService {
         }
 
         // IV. Probabilidad aleatoria 'b'
-        double random = ThreadLocalRandom.current().nextInt(0, 255);
+        int random = ThreadLocalRandom.current().nextInt(0, 256);
         return random < a;
 
     }
