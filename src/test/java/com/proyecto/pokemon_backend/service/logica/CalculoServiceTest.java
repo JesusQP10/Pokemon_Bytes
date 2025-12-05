@@ -13,7 +13,7 @@ public class CalculoServiceTest {
 
     @BeforeEach // Esto se ejecuta antes de cada @Test
     void setUp() {
-        // Si usas @SpringBootTest, Spring lo inyecta. Si no, lo inicializamos manualmente:
+        //Spring lo inyecta. Si no, lo inicializamos manualmente:
         calculoService = new CalculoService(); 
     }
    
