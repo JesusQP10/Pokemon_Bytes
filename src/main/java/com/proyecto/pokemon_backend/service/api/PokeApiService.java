@@ -51,5 +51,13 @@ public class PokeApiService {
                 .retrieve()
                 .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {});
     }
+
+    // Método para obtener capture_rate
+    public Mono<Map<String, Object>> getPokemonSpecies(String idOrName){
+        return webClient.get()
+            .uri("pokemon-species/{id}", idOrName)
+            .retrieve()
+            .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>(){}) ;
+    }
     
 }

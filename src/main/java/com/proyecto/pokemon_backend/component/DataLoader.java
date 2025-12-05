@@ -9,6 +9,7 @@ import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.util.function.Tuple2; 
 
 import java.util.List;
 import java.util.Map;
@@ -21,9 +22,9 @@ public class DataLoader implements CommandLineRunner {
     private final AtaquesRepository ataquesRepository;
     private final PokeApiService apiService;
 
-    // LÍMITES DE LA GENERACIÓN II (Oro/Plata/Cristal)
-    private static final int POKEMON_LIMIT = 251; // De Bulbasaur a Celebi
-    private static final int MOVES_LIMIT = 251;   // Hasta el movimiento "Paliza" (Beat Up)
+    // LÍMITES DE LA GENERACIÓN II
+    private static final int POKEMON_LIMIT = 251; 
+    private static final int MOVES_LIMIT = 251;   
 
     public DataLoader(PokedexMasterRepository pokedexRepository, 
                       AtaquesRepository ataquesRepository, 
@@ -36,63 +37,56 @@ public class DataLoader implements CommandLineRunner {
     @Override
     public void run(String... args) throws Exception {
         
-        // ---------------------------------------------------------
-        // 1. CARGA DE POKÉDEX (1 al 251)
-        // ---------------------------------------------------------
+        // 1. CARGA DE POKÉDEX 
         if (pokedexRepository.count() < POKEMON_LIMIT) {
-            System.out.println("--- INICIANDO CARGA MASIVA DE POKÉDEX (1-" + POKEMON_LIMIT + ") ---");
-            System.out.println("Por favor espera, descargando datos con concurrencia controlada...");
+            System.out.println("--- INICIANDO CARGA DE POKÉDEX (CON RATIO DE CAPTURA) ---");
+            System.out.println("Descargando datos combinados (Detalles + Especies)...");
 
             Flux.range(1, POKEMON_LIMIT)
-                // SOLUCIÓN AL ERROR: Limitamos la concurrencia a 5 peticiones simultáneas
-                .flatMap(id -> apiService.getPokemonDetails(String.valueOf(id))
-                    .onErrorResume(e -> { 
-                        System.err.println("⚠️ Error cargando Pokémon ID " + id + ": " + e.getMessage());
-                        return Mono.empty(); // Si falla uno, continuamos con el siguiente
-                    }), 5) // <--- EL 5 ES LA CLAVE PARA NO SATURAR EL BUFFER
-                .map(this::mapApiDetailsToPokedexEntity)
-                .buffer(20) // Guardamos en la BD en grupos de 20
-                .doOnNext(pokedexRepository::saveAll)
-                .blockLast(); // Esperamos a que termine antes de seguir
+                .flatMap(id -> 
+                    // 
+                    Mono.zip(
+                        apiService.getPokemonDetails(String.valueOf(id)), // T1: Datos base (Stats)
+                        apiService.getPokemonSpecies(String.valueOf(id))  // T2: Datos especie (Capture Rate)
+                    ).onErrorResume(e -> {
+                        System.err.println("Error cargando ID " + id + ": " + e.getMessage());
+                        return Mono.empty();
+                    }), 5 // Concurrencia controlada
+                )
                 
-            System.out.println("--- ✅ CARGA DE POKÉDEX COMPLETADA: " + pokedexRepository.count() + " registros. ---");
+                .map(tuple -> mapCombinedDataToEntity(tuple.getT1(), tuple.getT2()))
+                .buffer(20)
+                .doOnNext(pokedexRepository::saveAll)
+                .blockLast();
+                
+            System.out.println("--- POKÉDEX ACTUALIZADA (" + pokedexRepository.count() + " registros) ---");
         }
 
-        // ---------------------------------------------------------
-        // 2. CARGA DE ATAQUES (1 al 251)
-        // ---------------------------------------------------------
+        // 2. CARGA DE ATAQUES 
         if (ataquesRepository.count() < MOVES_LIMIT) {
-            System.out.println("--- INICIANDO CARGA DE ATAQUES (1-" + MOVES_LIMIT + ") ---");
-
+            System.out.println("--- INICIANDO CARGA DE ATAQUES ---");
             Flux.range(1, MOVES_LIMIT)
-                // SOLUCIÓN AL ERROR: Limitamos la concurrencia a 5
-                .flatMap(id -> apiService.getMoveDetails(String.valueOf(id))
-                    .onErrorResume(e -> {
-                        System.err.println("⚠️ Error cargando Ataque ID " + id + ": " + e.getMessage());
-                        return Mono.empty();
-                    }), 5) // <--- CONCURRENCIA CONTROLADA
+                .flatMap(id -> apiService.getMoveDetails(String.valueOf(id)).onErrorResume(e -> Mono.empty()), 5)
                 .map(this::mapApiDetailsToAtaqueEntity)
                 .buffer(20)
                 .doOnNext(ataquesRepository::saveAll)
                 .blockLast();
-
-            System.out.println("--- ✅ CARGA DE ATAQUES COMPLETADA (" + ataquesRepository.count() + " registros) ---");
+            System.out.println("--- ATAQUES CARGADOS ---");
         }
-        
-        System.out.println("--- SISTEMA LISTO: DATOS MAESTROS CARGADOS ---");
     }
     
-    // ---------------------------------------------------------
-    // MÉTODOS DE MAPEO (LOGICA DE NEGOCIO)
-    // ---------------------------------------------------------
-    
-    private PokedexMaestra mapApiDetailsToPokedexEntity(Map<String, Object> details) {
+    // --- MAPPERS ---
+
+    // <--- Este método recibe DOS mapas (details y species)
+    private PokedexMaestra mapCombinedDataToEntity(Map<String, Object> details, Map<String, Object> species) {
         PokedexMaestra pkm = new PokedexMaestra();
+        
+        // Datos básicos (mapa 'details')
         pkm.setId_pokedex((Integer) details.get("id"));
         pkm.setNombre((String) details.get("name"));
         pkm.setXp_base((Integer) details.get("base_experience"));
         
-        // Mapeo de Stats
+        // Stats
         List<Map<String, Object>> statsList = (List<Map<String, Object>>) details.get("stats");
         Map<String, Integer> statsMap = statsList.stream().collect(Collectors.toMap(
                 stat -> (String) ((Map<String, Object>) stat.get("stat")).get("name"),
@@ -102,33 +96,36 @@ public class DataLoader implements CommandLineRunner {
         pkm.setStat_base_hp(statsMap.get("hp"));
         pkm.setStat_base_ataque(statsMap.get("attack"));
         pkm.setStat_base_defensa(statsMap.get("defense"));
-        
-        // Manejo de Stats Especiales (Gen 2 unificada vs Gen 3 desdoblada)
-        pkm.setStat_base_atq_especial(statsMap.getOrDefault("special-attack", statsMap.get("special"))); 
+        pkm.setStat_base_atq_especial(statsMap.getOrDefault("special-attack", statsMap.get("special")));
         pkm.setStat_base_def_especial(statsMap.getOrDefault("special-defense", statsMap.get("special")));
         pkm.setStat_base_velocidad(statsMap.get("speed"));
 
-        // Mapeo de Tipos
+        // Tipos
         List<Map<String, Object>> types = (List<Map<String, Object>>) details.get("types");
         pkm.setTipo_1((String) ((Map<String, Object>) types.get(0).get("type")).get("name"));
-        
         if (types.size() > 1) {
             pkm.setTipo_2((String) ((Map<String, Object>) types.get(1).get("type")).get("name"));
         } else {
              pkm.setTipo_2(null);
         }
         
+        // <--- Extracción del Ratio de Captura ( mapa 'species')
+        if (species != null && species.containsKey("capture_rate")) {
+            pkm.setRatioCaptura((Integer) species.get("capture_rate"));
+        } else {
+            pkm.setRatioCaptura(45); // Valor por defecto 
+        }
+
         pkm.setId_evolucion(null);
         return pkm;
     }
     
+    // Mapper de Ataques 
     private Ataques mapApiDetailsToAtaqueEntity(Map<String, Object> details) {
         Ataques ataque = new Ataques();
-        
-        ataque.setIdAtaque((Integer) details.get("id")); 
+        ataque.setIdAtaque((Integer) details.get("id"));
         ataque.setNombre((String) details.get("name"));
         
-        // Mapeo seguro de nulos (Potencia/Precisión/PP pueden ser null en la API)
         Integer power = (Integer) details.get("power");
         ataque.setPotencia(power != null ? power : 0); 
 
@@ -138,7 +135,6 @@ public class DataLoader implements CommandLineRunner {
         Integer pp = (Integer) details.get("pp");
         ataque.setPpBase(pp != null ? pp : 0);
         
-        // Tipo y Categoría
         Map<String, Object> typeMap = (Map<String, Object>) details.get("type");
         ataque.setTipo((String) typeMap.get("name"));
         

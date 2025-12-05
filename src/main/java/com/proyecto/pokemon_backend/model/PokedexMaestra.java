@@ -27,6 +27,9 @@ public class PokedexMaestra {
     private Integer xp_base;
     private Integer id_evolucion;  //Clave foránea 
 
+    @Column(name = "ratio_captura")
+    private Integer ratioCaptura; // 0-255
+
     // La realación con la clave foranea se gestiona en MySQL directamente
     
 }
